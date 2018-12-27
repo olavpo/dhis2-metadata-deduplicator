@@ -1,0 +1,26 @@
+{
+  "name": "dhis2-metadata-deduplicator",
+  "version": "1.0.0",
+  "description": "Tool for removing duplicate dhis2 metadata.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/olavpo/dhis2-metadata-deduplicator.git"
+  },
+  "author": "Olav Poppe",
+  "license": "BSD-3-Clause",
+  "bugs": {
+    "url": "https://github.com/olavpo/dhis2-metadata-deduplicator/issues"
+  },
+  "homepage": "https://github.com/olavpo/dhis2-metadata-deduplicator#readme",
+  "dependencies": {
+    "inquirer": "^6.2.1",
+    "npm": "^6.5.0"
+  },
+  "devDependencies": {
+    "eslint": "^5.11.0"
+  }
+}
