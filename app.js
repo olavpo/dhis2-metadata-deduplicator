@@ -64,6 +64,9 @@ function chooseOperation() {
 		case "categories":
 			categories();
 			break;
+		case "categoryCombos":
+			categoryCombos();
+			break;
 		default:
 			console.log("Not implemented");
 		}
@@ -71,16 +74,74 @@ function chooseOperation() {
 	});
 }
 
-function categories() {
-	catFetch().then(catData => {
-		let duplicates = catDupes(catData);
-		catPromptDupes(duplicates, catData).then(results => {
+function categoryCombos() {
+	comboFetch().then(comboData => {
+		let duplicates = catComboDupes(comboData, "categories");
+		if (Object.keys(duplicates).length == 0) {
+			console.log("No duplicate categoryCombos found!");
+			chooseOperation();
+			return;
+		}
+		catComboPromptDupes(duplicates, comboData, "categoryCombos").then(results => {
+
+			console.log(results);
+
 			//Iterate over each "group" of duplicates
 			var promises = [];
 			for (dup of results) {
 				
-				catFilterAndPrefix(catData, dup.duplicates)
-				catAddMaster(catData, dup.master)
+				catComboFilterAndPrefix(comboData, dup.duplicates)
+				catComboAddMaster(comboData, dup.master)
+
+				promises.push(comboReferences("dataElements", dup.master, dup.duplicates));
+				promises.push(comboReferences("dataApprovalWorkflows", dup.master, dup.duplicates));
+				promises.push(comboReferences("categoryOptionCombos", dup.master, dup.duplicates));
+				promises.push(comboReferences("programs", dup.master, dup.duplicates));
+				promises.push(comboReferences("dataSets", dup.master, dup.duplicates));				
+			}
+
+			//Add categories to metadata
+			metadata["categoryCombos"] = comboData.duplicates.concat(comboData.master);
+
+			Q.all(promises).then(results => {
+				for (let status of results) {
+					if (!status) {
+						console.log("Problem preparing metadata to be updated. Cancelling.");
+						console.log("categoryOptionGroups, categoryOptionCombos, categories, charts, reportTables");
+						console.log(results);
+						return;
+					}
+				}
+
+				//Post the updated metadata
+				fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
+					if (err) throw err;
+					console.log("metadata.json written");
+				});
+				d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
+					console.log("Update sent. Status: " + result.status);
+					chooseOperation();
+				});
+			});
+		});
+	});
+}
+
+function categories() {
+	catFetch().then(catData => {
+		let duplicates = catComboDupes(catData, "categoryOptions");
+		if (Object.keys(duplicates).length == 0) {
+			console.log("No duplicate categories found!");
+			chooseOperation();
+			return;
+		}
+		catComboPromptDupes(duplicates, catData, "categories").then(results => {
+			//Iterate over each "group" of duplicates
+			var promises = [];
+			for (dup of results) {
+				
+				catComboFilterAndPrefix(catData, dup.duplicates)
+				catComboAddMaster(catData, dup.master)
 
 				//Fix catcombo references
 				promises.push(catReferences(dup.master, dup.duplicates));
@@ -117,18 +178,18 @@ function categories() {
 	});
 }
 
-async function catPromptDupes(duplicates, catData) {
+async function catComboPromptDupes(duplicates, data, type) {
 	let toEliminate = [];
 	console.log("\n" + Object.keys(duplicates).length + " potential group(s) of duplicates");
 	for (var dupe in duplicates) {
 		var choices = [];
 		for (var listItem in duplicates[dupe]) {
-			choices.push(listItem + ": " + getName(listItem,catData.all));			
+			choices.push(listItem + ": " + getName(listItem,data.all));			
 		}
 		let { master } = await inquirer.prompt([{
 			"type": "list",
 			"name": "master",
-			"message": "Master category to keep",
+			"message": "Master " + type + " to keep",
 			"choices": choices
 		}])
 		
@@ -140,7 +201,7 @@ async function catPromptDupes(duplicates, catData) {
 		let { dupes } = await inquirer.prompt([{
 			"type": "checkbox",
 			"name": "dupes",
-			"message": "Duplicate categories to remove",
+			"message": "Duplicate " + type + " to remove",
 			"choices": remainingChoices
 		}])
 		var dupeIds = [];
@@ -154,11 +215,11 @@ async function catPromptDupes(duplicates, catData) {
 	return toEliminate;
 }
 
-function catDupes(catData) {
+function catComboDupes(data, subProp) {
 	var all = [];
-	for (let cat of catData.all) {
+	for (let cat of data.all) {
 		var info = {"id": cat.id, "opts": [], "compareString": ""};
-		for (var co of cat.categoryOptions) {
+		for (var co of cat[subProp]) {
 			info.opts.push(co.id);
 		}
 		info.opts.sort();
@@ -179,7 +240,8 @@ function catDupes(catData) {
 	return duplicates;
 }
 
-function catFilterAndPrefix(catData, duplicates) {
+
+function catComboFilterAndPrefix(catData, duplicates) {
 	for (let cat of catData.all) {
 		if (duplicates.indexOf(cat.id) >= 0) {
 			cat.name = "00 DUPLICATE " + cat.name;
@@ -187,7 +249,7 @@ function catFilterAndPrefix(catData, duplicates) {
 		}
 	}
 }
-function catAddMaster(catData, master) {
+function catComboAddMaster(catData, master) {
 	for (var cat of catData.all) {
 		if (master == cat.id) {
 			catData.master.push(cat);
@@ -200,6 +262,16 @@ function catFetch() {
 	var apiResource = "categories.json?fields=:owner";
 	d2Get(apiResource).then(function (data) {
 		deferred.resolve({"all": data.categories, "duplicates": [], "master": []});
+	});
+
+	return deferred.promise;
+}
+
+function comboFetch() {
+	var deferred = Q.defer();
+	var apiResource = "categoryCombos.json?fields=:owner";
+	d2Get(apiResource).then(function (data) {
+		deferred.resolve({"all": data.categoryCombos, "duplicates": [], "master": []});
 	});
 
 	return deferred.promise;
@@ -223,7 +295,35 @@ function catReferences(masterId, duplicateIds) {
 				cc.categories.push ({"id": cat});
 			}
 		}
-		metadata["categoryCombos"] = objs;
+		
+		if (!metadata["categoryCombos"]) metadata["categoryCombos"] = [];
+		metadata["categoryCombos"] = metadata["categoryCombos"].concat(objs);
+
+		deferred.resolve(true);
+	});
+	return deferred.promise;
+}
+
+
+function comboReferences(type, masterId, duplicateIds) {
+	var deferred = Q.defer();
+	refComboFetch(type, duplicateIds).then(objs => {
+		for (let obj of objs) {
+			if (duplicateIds.indexOf(obj.categoryCombo.id) >= 0) {
+				obj.categoryCombo.id = masterId;
+			}
+			if (type == "dataSets") {
+				
+				for (let dse of obj.dataSetElements) {
+					if (duplicateIds.indexOf(dse.categoryCombo.id) >= 0) {
+						dse.categoryCombo.id = masterId;
+					}
+				}
+			}
+		}
+
+		if (!metadata[type]) metadata[type] = [];
+		metadata[type] = metadata[type].concat(objs);
 		deferred.resolve(true);
 	});
 	return deferred.promise;
@@ -240,7 +340,9 @@ function catFavReferences(type, masterId, duplicateIds) {
 				}
 			}
 		}
-		metadata[type] = objs;
+		if (!metadata[type]) metadata[type] = [];
+		metadata[type] = metadata[type].concat(objs);
+		
 		deferred.resolve(true);
 	});
 	return deferred.promise;
@@ -290,7 +392,6 @@ function categoryOptions() {
 			promises.push(coFavReferences("reportTables", master, duplicates));
 
 			Q.all(promises).then(results => {
-				console.log(results);
 				for (let status of results) {
 					if (!status) {
 						console.log("Problem preparing metadata to be updated. Cancelling.");
@@ -335,7 +436,8 @@ function coReferences(type, masterId, duplicateIds) {
 				obj.categoryOptions.push ({"id": co});
 			}
 		}
-		metadata[type] = objs;
+		if (!metadata[type]) metadata[type] = [];
+		metadata[type] = metadata[type].concat(objs);
 		deferred.resolve(true);
 	});
 	return deferred.promise;
@@ -361,7 +463,8 @@ function coFavReferences(type, masterId, duplicateIds) {
 				}
 			}
 		}
-		metadata[type] = objs;
+		if (!metadata[type]) metadata[type] = [];
+		metadata[type] = metadata[type].concat(objs);
 		deferred.resolve(true);
 	});
 	return deferred.promise;
@@ -402,6 +505,21 @@ function refFetch(type, duplicateIds) {
 function refCatFetch(type, duplicateIds) {
 	var deferred = Q.defer();
 	var apiResource = type + ".json?fields=:owner&filter=categories.id:in:[" + duplicateIds.join(",") + "]";
+	d2Get(apiResource).then(function (data) {
+		deferred.resolve(data[type]);
+	});
+
+	return deferred.promise;
+}
+
+function refComboFetch(type, duplicateIds) {
+	var deferred = Q.defer();
+	var apiResource = type + ".json?fields=:owner&filter=categoryCombo.id:in:[" + duplicateIds.join(",") + "]";
+	if (type == "dataSets") {
+		apiResource = type + ".json?fields=:owner&filter=dataSetElements.categoryCombo.id:in:[" + 
+			duplicateIds.join(",") + "]&filter=categoryCombo.id:in:[" + 
+			duplicateIds.join(",") + "]&rootJunction=OR";
+	}
 	d2Get(apiResource).then(function (data) {
 		deferred.resolve(data[type]);
 	});
