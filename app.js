@@ -1,4 +1,5 @@
 const inquirer = require("inquirer");
+inquirer.registerPrompt("search-checkbox", require("inquirer-search-checkbox"));
 const Q = require("q");
 const request = require("request");
 const fs = require('fs');
@@ -348,71 +349,104 @@ function catFavReferences(type, masterId, duplicateIds) {
 	return deferred.promise;
 }
 
+function coMakeChoices() {
+	var deferred = Q.defer();
+
+	d2Get("categoryOptions.json").then(data => {
+		var choices = [];
+		for (let co of data.categoryOptions) {
+			if (co.displayName != "default") choices.push({"name": co.id + ": " + co.displayName});
+		}
+		deferred.resolve(choices);
+	});
+
+	return deferred.promise;
+}
+
 function categoryOptions() {
 	console.log("Deduping categoryOptions");
 
-	var optionInput = [
-		{
-			"type": "input",
-			"name": "master",
-			"message": "Option to keep (UID)",
-			"default": "FbLZS3ueWbQ"
-		},
-		{
-			"type": "input",
-			"name": "duplicates",
-			"message": "Options to eliminate (comma separated UIDs)",
-			"default": "btOyqprQ9e8,nuHLu6GaiWI"
-		}
-	];
-
-	inquirer.prompt(optionInput).then(answers => {
-		var master = answers.master;
-		var duplicates = answers.duplicates.split(",");
-
-		//Fetch the options in question
-		coFetch(master,duplicates).then( coData => {
-
-			//"Merge" the options - currently just merging orgunit references
-			coMergeOu(coData.master, coData.duplicates);
-
-			//Mark the duplicates with a "DUPLICATE" prefix
-			coPrefix(coData.duplicates);
-
-			metadata["categoryOptions"] = coData.duplicates;
-			metadata["categoryOptions"].push(coData.master);
-
-
-			//Fetch and modify related metadata objects
-			var promises = [];
-			promises.push(coReferences("categoryOptionGroups", master, duplicates));
-			promises.push(coReferences("categoryOptionCombos", master, duplicates));
-			promises.push(coReferences("categories", master, duplicates));
-			promises.push(coFavReferences("charts", master, duplicates));
-			promises.push(coFavReferences("reportTables", master, duplicates));
-
-			Q.all(promises).then(results => {
-				for (let status of results) {
-					if (!status) {
-						console.log("Problem preparing metadata to be updated. Cancelling.");
-						console.log("categoryOptionGroups, categoryOptionCombos, categories, charts, reportTables");
-						console.log(results);
-						return;
+	coMakeChoices().then(choices => {
+		var optionInput = [
+			{
+				"type": "search-checkbox",
+				"name": "options",
+				"message": "Related options to de-duplicate",
+				"choices": choices,
+				"validate": function(answer) {
+					if (answer.length < 2) {
+						return "At least 2 options must be selected";
 					}
+					return true;
 				}
-				//console.log(metadata);
-
-				//Post the updated metadata
-				/*fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
-					if (err) throw err;
-					console.log("metadata.json written");
-				});*/
-				d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
-					console.log("Update sent. Status: " + result.status);
-					chooseOperation();
-				});			
-				
+			}
+		];
+		inquirer.prompt(optionInput).then(answers => {
+			optionInput = [
+				{
+					"type": "list",
+					"name": "master",
+					"message": "Master option to keep",
+					"choices": answers.options
+				}
+			];
+			inquirer.prompt(optionInput).then(masterAnswer => {
+				var masterId = masterAnswer.master.split(":")[0];
+				var duplicateIds = [];
+				for (let opt of answers.options) {
+					var id = opt.split(":")[0];
+					if (id != masterId) duplicateIds.push(id);
+				}
+				categoryOptionMakeChanges(masterId, duplicateIds);
 			});
+			
+		});
+	});
+}
+
+function categoryOptionMakeChanges(master, duplicates) {
+	//Fetch the options in question
+	coFetch(master, duplicates).then( coData => {
+
+		//"Merge" the options - currently just merging orgunit references
+		coMergeOu(coData.master, coData.duplicates);
+
+		//Mark the duplicates with a "DUPLICATE" prefix
+		coPrefix(coData.duplicates);
+
+		metadata["categoryOptions"] = coData.duplicates;
+		metadata["categoryOptions"].push(coData.master);
+
+
+		//Fetch and modify related metadata objects
+		var promises = [];
+		promises.push(coReferences("categoryOptionGroups", master, duplicates));
+		promises.push(coReferences("categoryOptionCombos", master, duplicates));
+		promises.push(coReferences("categories", master, duplicates));
+		promises.push(coFavReferences("charts", master, duplicates));
+		promises.push(coFavReferences("reportTables", master, duplicates));
+
+		Q.all(promises).then(results => {
+			for (let status of results) {
+				if (!status) {
+					console.log("Problem preparing metadata to be updated. Cancelling.");
+					console.log("categoryOptionGroups, categoryOptionCombos, categories, charts, reportTables");
+					console.log(results);
+					return;
+				}
+			}
+			//console.log(metadata);
+
+			//Post the updated metadata
+			/*fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
+				if (err) throw err;
+				console.log("metadata.json written");
+			});*/
+			d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
+				console.log("Update sent. Status: " + result.status);
+				chooseOperation();
+			});			
+			
 		});
 	});
 }
