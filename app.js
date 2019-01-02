@@ -12,7 +12,8 @@ var serverInfo = {
 	"password": null	
 };
 var metadata;
-
+var metadataDelete;
+var metadataFinal;
 
 function start() {
 	var initialInput = [
@@ -20,7 +21,7 @@ function start() {
 			"type": "input",
 			"name": "url",
 			"message": "URL",
-			"default": "https://play.dhis2.org/2.30"
+			"default": "http://localhost:9090/demo"
 		},
 		{
 			"type": "input",
@@ -56,7 +57,7 @@ function chooseOperation() {
 	];
 
 	inquirer.prompt(initialInput).then(answers => {
-		metadata = {};
+		metadata = {}, metadataDelete = {}, metadataFinal = {};
 
 		switch (answers.type) {
 		case "categoryOptions":
@@ -75,6 +76,129 @@ function chooseOperation() {
 	});
 }
 
+async function done() {
+	var initialInput = [
+		{
+			type: "checkbox",
+			name: "action",
+			message: "Metadata ready. Proceed?",
+			choices: ["Post to " + serverInfo.url, "Save to metadata.json", "Cancel"]
+		}
+	];
+
+	let {action} = await inquirer.prompt(initialInput);
+
+	answers = action.join();
+	if (answers.indexOf("Cancel") >= 0) {
+		chooseOperation();
+		return;
+	}
+
+	if (!await donePostMetadataPreivew()) {
+		console.log("Validation of metadata against " + serverInfo.url + " failed. Cancelling.");
+		chooseOperation();
+		return;
+	}
+	else {
+		console.log("Validation of metadata against " + serverInfo.url + " succeeded.");
+	}
+	
+	if (answers.indexOf("Save to") >= 0) {
+		let result = await doneWriteMetadata();
+	}
+	if (answers.indexOf("Post to") >= 0) {
+		let result = await donePostMetadata();
+	}
+
+	chooseOperation();
+}
+
+function donePostMetadata() {
+	var deferred = Q.defer();
+	d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
+		console.log("Updating related metadata on " + serverInfo.url + " Status: " + result.status);
+		if (result.status != "OK") {
+			console.log("Writing info to ERROR.json");
+			fs.writeFile ("ERROR.json", JSON.stringify(result), function(err) {
+				if (err) throw err;
+				deferred.resolve(false);
+			});
+		}
+		else {
+			d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=DELETE&mergeMode=REPLACE", metadataDelete).then(result => {
+				console.log("Deleting duplicate metadata on " + serverInfo.url + " Status: " + result.status);
+				if (result.status != "OK") {
+					console.log("Writing info to ERROR.json");
+					fs.writeFile ("ERROR.json", JSON.stringify(result), function(err) {
+						if (err) throw err;
+						deferred.resolve(false);
+					});
+				}
+				else {
+					d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadataFinal).then(result => {
+						console.log("Updating master metadata on " + serverInfo.url + " Status: " + result.status);
+						if (result.status != "OK") {
+							console.log("Writing info to ERROR.json");
+							fs.writeFile ("ERROR.json", JSON.stringify(result), function(err) {
+								if (err) throw err;
+								deferred.resolve(false);
+							});
+						}
+						else {
+							deferred.resolve(true);
+						}			
+					});	
+				}		
+			});
+		}
+	});
+	return deferred.promise;
+}
+
+function donePostMetadataPreivew() {
+	var deferred = Q.defer();
+	d2Post("metadata.json?dryRun=true&importMode=VALIDATE&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
+		if (result.status != "OK") {
+			console.log("Validation of metadata changes failed - see ERROR.json");
+			fs.writeFile ("ERROR.json", JSON.stringify(result), function(err) {
+				if (err) throw err;
+				deferred.resolve(false);
+			});
+		}
+		else {
+			d2Post("metadata.json?dryRun=true&importMode=VALIDATE&identifier=UID&importStrategy=DELETE&mergeMode=REPLACE", metadataDelete).then(result => {
+				if (result.status != "OK") {
+					console.log("Validation of metadata changes failed - see ERROR.json");
+					fs.writeFile ("ERROR.json", JSON.stringify(result), function(err) {
+						if (err) throw err;
+						deferred.resolve(false);
+					});
+				}
+				deferred.resolve(true);
+			});
+		}
+	});
+	return deferred.promise;
+}
+
+function doneWriteMetadata() {
+	var deferred = Q.defer();
+	fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
+		if (err) throw err;
+		console.log("metadata.json written");
+		fs.writeFile ("metadataDelete.json", JSON.stringify(metadataDelete), function(err) {
+			if (err) throw err;
+			console.log("metadataDelete.json written");
+			fs.writeFile ("metadataFinal.json", JSON.stringify(metadataFinal), function(err) {
+				if (err) throw err;
+				console.log("metadataFinal.json written");
+				deferred.resolve(true);
+			});
+		});
+	});
+	return deferred.promise;
+}
+
 function categoryCombos() {
 	comboFetch().then(comboData => {
 		let duplicates = catComboDupes(comboData, "categories");
@@ -88,8 +212,11 @@ function categoryCombos() {
 			console.log(results);
 
 			//Iterate over each "group" of duplicates
-			var promises = [];
+			var promises = [], allMasterIds = [], allDuplicateIds = [];
 			for (dup of results) {
+
+				allMasterIds.push(dup.master);
+				allDuplicateIds = allDuplicateIds.concat(dup.duplicates);
 				
 				catComboFilterAndPrefix(comboData, dup.duplicates)
 				catComboAddMaster(comboData, dup.master)
@@ -114,15 +241,8 @@ function categoryCombos() {
 					}
 				}
 
-				//Post the updated metadata
-				fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
-					if (err) throw err;
-					console.log("metadata.json written");
-				});
-				d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
-					console.log("Update sent. Status: " + result.status);
-					chooseOperation();
-				});
+				if (prepMetadata("categoryCombos", allMasterIds, allDuplicateIds)) done();
+				else chooseOperation();;
 			});
 		});
 	});
@@ -138,8 +258,11 @@ function categories() {
 		}
 		catComboPromptDupes(duplicates, catData, "categories").then(results => {
 			//Iterate over each "group" of duplicates
-			var promises = [];
+			var promises = [], allMasterIds = [], allDuplicateIds = [];
 			for (dup of results) {
+
+				allMasterIds.push(dup.master);
+				allDuplicateIds = allDuplicateIds.concat(dup.duplicates);
 				
 				catComboFilterAndPrefix(catData, dup.duplicates)
 				catComboAddMaster(catData, dup.master)
@@ -165,19 +288,13 @@ function categories() {
 					}
 				}
 
-				//Post the updated metadata
-				fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
-					if (err) throw err;
-					console.log("metadata.json written");
-				});
-				d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
-					console.log("Update sent. Status: " + result.status);
-					chooseOperation();
-				});
+				if (prepMetadata("categories", allMasterIds, allDuplicateIds)) done();
+				else chooseOperation();
 			});
 		});
 	});
 }
+
 
 async function catComboPromptDupes(duplicates, data, type) {
 	let toEliminate = [];
@@ -209,12 +326,56 @@ async function catComboPromptDupes(duplicates, data, type) {
 		for (var d of dupes) {
 			dupeIds.push(d.split(":")[0]);
 		}
+
 		toEliminate.push({"master": master.split(":")[0], "duplicates": dupeIds});
+		await verifyProps(["name", "code", "publicAccess", "created"], data.all, master.split(":")[0], dupeIds);
 		console.log("\n")	
 	}
 
 	return toEliminate;
 }
+
+async function verifyProps(props, objects, masterId, dupliateIds) {
+	var master = getObject(masterId, objects);
+	var dupes = dupliateIds.join();
+
+	console.log("Values to use for " + getName(masterId, objects));
+	for (let prop of props) {
+		var options = [];
+		if (master.hasOwnProperty(prop)) options.push(master[prop]);
+
+		for (let obj of objects) {
+			if (dupes.indexOf(obj.id) >= 0 && obj.hasOwnProperty(prop)) {
+				options.push(obj[prop]);
+			}
+		}
+		
+		if (options.length > 0) {
+			let { chosenForProp } = await inquirer.prompt([{
+				"type": "list",
+				"name": "chosenForProp",
+				"message": prop,
+				"default": master[prop],
+				"choices": options
+			}]);
+			
+			master[prop] = chosenForProp;
+		}
+		
+	}
+}
+
+function verifyCoProps(props, objects, masterId, dupliateIds) {
+	var deferred = Q.defer();
+
+	verifyProps(props, objects, masterId, dupliateIds).then(result => {
+		deferred.resolve("true");
+	})
+
+	return deferred.promise;
+
+}
+
 
 function catComboDupes(data, subProp) {
 	var all = [];
@@ -245,7 +406,6 @@ function catComboDupes(data, subProp) {
 function catComboFilterAndPrefix(catData, duplicates) {
 	for (let cat of catData.all) {
 		if (duplicates.indexOf(cat.id) >= 0) {
-			cat.name = "00 DUPLICATE " + cat.name;
 			catData.duplicates.push(cat);
 		}
 	}
@@ -411,12 +571,10 @@ function categoryOptionMakeChanges(master, duplicates) {
 		//"Merge" the options - currently just merging orgunit references
 		coMergeOu(coData.master, coData.duplicates);
 
-		//Mark the duplicates with a "DUPLICATE" prefix
-		coPrefix(coData.duplicates);
-
 		metadata["categoryOptions"] = coData.duplicates;
 		metadata["categoryOptions"].push(coData.master);
 
+		
 
 		//Fetch and modify related metadata objects
 		var promises = [];
@@ -425,6 +583,7 @@ function categoryOptionMakeChanges(master, duplicates) {
 		promises.push(coReferences("categories", master, duplicates));
 		promises.push(coFavReferences("charts", master, duplicates));
 		promises.push(coFavReferences("reportTables", master, duplicates));
+		promises.push(verifyCoProps(["name", "shortName", "code", "publicAccess", "created"], metadata["categoryOptions"], master, duplicates));
 
 		Q.all(promises).then(results => {
 			for (let status of results) {
@@ -435,20 +594,30 @@ function categoryOptionMakeChanges(master, duplicates) {
 					return;
 				}
 			}
-			//console.log(metadata);
 
-			//Post the updated metadata
-			/*fs.writeFile ("metadata.json", JSON.stringify(metadata), function(err) {
-				if (err) throw err;
-				console.log("metadata.json written");
-			});*/
-			d2Post("metadata.json?importMode=COMMIT&identifier=UID&importStrategy=UPDATE&mergeMode=REPLACE", metadata).then(result => {
-				console.log("Update sent. Status: " + result.status);
-				chooseOperation();
-			});			
+			if (prepMetadata("categoryOptions", master, duplicates)) done();
+			else chooseOperation();
 			
 		});
 	});
+}
+
+//Split metadata into "dependencies" to be imported, "duplicates" to be deleted, and "master" to be updated when duplicates are removed (to avoid non-unique names etc)
+function prepMetadata(objectType, master, duplicates) {
+	var dupString = duplicates.join("");
+	metadataDelete[objectType] = [];
+	metadataFinal[objectType] = [];
+	for (let obj of metadata[objectType]) {
+		if (obj.id == master) metadataFinal[objectType].push(obj);
+		else if (dupString.indexOf(obj.id) >= 0) metadataDelete[objectType].push(obj);
+		else {
+			console.log("Problem in prepMetadata");
+			return false;
+		}
+	}
+	delete metadata[objectType];
+
+	return true;
 }
 
 
@@ -516,12 +685,6 @@ function coMergeOu(master, duplicates) {
 	master.orgunits = [];
 	for (let ou in orgunitsUnique) {
 		master.organisationUnits.push ({"id": ou});
-	}
-}
-
-function coPrefix(duplicates) {
-	for (let opt of duplicates) {
-		opt.name = opt.name = "00 DUPLICATE " + opt.name;
 	}
 }
 
@@ -655,6 +818,13 @@ function getName(id, metadataArray) {
 		if (obj.id == id) return obj.name;
 	}
 	return "";
-} 
+}
+
+function getObject(id, metadataArray) {
+	for (var obj of metadataArray) {
+		if (obj.id == id) return obj;
+	}
+	return null;
+}
 
 start();
