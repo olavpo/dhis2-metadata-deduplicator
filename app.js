@@ -607,15 +607,13 @@ function prepMetadata(objectType, master, duplicates) {
 	var dupString = duplicates.join("");
 	metadataDelete[objectType] = [];
 	metadataFinal[objectType] = [];
+	var remaining = [];
 	for (let obj of metadata[objectType]) {
 		if (obj.id == master) metadataFinal[objectType].push(obj);
 		else if (dupString.indexOf(obj.id) >= 0) metadataDelete[objectType].push(obj);
-		else {
-			console.log("Problem in prepMetadata");
-			return false;
-		}
+		else remaining.push(obj);
 	}
-	delete metadata[objectType];
+	metadata[objectType] = remaining;
 
 	return true;
 }
