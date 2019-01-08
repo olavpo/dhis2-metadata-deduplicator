@@ -328,7 +328,7 @@ async function catComboPromptDupes(duplicates, data, type) {
 		}
 
 		toEliminate.push({"master": master.split(":")[0], "duplicates": dupeIds});
-		await verifyProps(["name", "code", "publicAccess", "created"], data.all, master.split(":")[0], dupeIds);
+		await verifyProps(["name", "code", "publicAccess"], data.all, master.split(":")[0], dupeIds);
 		console.log("\n")	
 	}
 
@@ -583,7 +583,7 @@ function categoryOptionMakeChanges(master, duplicates) {
 		promises.push(coReferences("categories", master, duplicates));
 		promises.push(coFavReferences("charts", master, duplicates));
 		promises.push(coFavReferences("reportTables", master, duplicates));
-		promises.push(verifyCoProps(["name", "shortName", "code", "publicAccess", "created"], metadata["categoryOptions"], master, duplicates));
+		promises.push(verifyCoProps(["name", "shortName", "code", "publicAccess"], metadata["categoryOptions"], master, duplicates));
 
 		Q.all(promises).then(results => {
 			for (let status of results) {
@@ -763,7 +763,10 @@ function coFetch(masterId, duplicateIds) {
 function d2Get(apiResource) {
 	var deferred = Q.defer();
 
-	var url = serverInfo.url + "/api/" + apiResource + "&paging=false";
+	var url = serverInfo.url + "/api/" + apiResource;
+	if (url.indexOf("?") >= 0) url += "&paging=false";
+	else url += "?paging=false";
+
 	request.get({
 		uri: url,
 		json: true,
