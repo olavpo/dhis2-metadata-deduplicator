@@ -6,6 +6,9 @@ const fs = require('fs');
 
 console.log("DHIS2 metadata de-duplicator");
 
+//For emergencies: ignore expired certificates by commenting out this line
+//process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0;
+
 var serverInfo = {
 	"url": null,
 	"username": null,
@@ -304,32 +307,34 @@ async function catComboPromptDupes(duplicates, data, type) {
 		for (var listItem in duplicates[dupe]) {
 			choices.push(listItem + ": " + getName(listItem,data.all));			
 		}
+		choices.push("[Skip]");
 		let { master } = await inquirer.prompt([{
 			"type": "list",
 			"name": "master",
 			"message": "Master " + type + " to keep",
 			"choices": choices
 		}])
-		
-		var remainingChoices = [];
-		for (var choice of choices) {
-			if (choice != master) remainingChoices.push(choice);
-		}
+		if (master != "[Skip]") {
+			var remainingChoices = [];
+			for (var choice of choices) {
+				if (choice != master && choice != "[Skip]") remainingChoices.push(choice);
+			}
 
-		let { dupes } = await inquirer.prompt([{
-			"type": "checkbox",
-			"name": "dupes",
-			"message": "Duplicate " + type + " to remove",
-			"choices": remainingChoices
-		}])
-		var dupeIds = [];
-		for (var d of dupes) {
-			dupeIds.push(d.split(":")[0]);
-		}
+			let { dupes } = await inquirer.prompt([{
+				"type": "checkbox",
+				"name": "dupes",
+				"message": "Duplicate " + type + " to remove",
+				"choices": remainingChoices
+			}])
+			var dupeIds = [];
+			for (var d of dupes) {
+				dupeIds.push(d.split(":")[0]);
+			}
 
-		toEliminate.push({"master": master.split(":")[0], "duplicates": dupeIds});
-		await verifyProps(["name", "code", "publicAccess"], data.all, master.split(":")[0], dupeIds);
-		console.log("\n")	
+			toEliminate.push({"master": master.split(":")[0], "duplicates": dupeIds});
+			await verifyProps(["name", "code", "publicAccess"], data.all, master.split(":")[0], dupeIds);
+			console.log("\n")	
+		}
 	}
 
 	return toEliminate;
@@ -533,6 +538,7 @@ function categoryOptions() {
 				"name": "options",
 				"message": "Related options to de-duplicate",
 				"choices": choices,
+				"pageSize": 20,
 				"validate": function(answer) {
 					if (answer.length < 2) {
 						return "At least 2 options must be selected";
