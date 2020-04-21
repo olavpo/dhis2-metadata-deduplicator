@@ -19,8 +19,7 @@
   "dependencies": {
     "inquirer": "^6.2.1",
     "inquirer-search-checkbox": "^1.0.0",
-    "npm": "^6.5.0",
-    "q": "git+https://github.com/kriskowal/q.git",
+    "npm": "^6.14.4",
     "request": "^2.88.0"
   },
   "devDependencies": {
